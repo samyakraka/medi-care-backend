@@ -30,15 +30,68 @@ CORS(app, resources={
     }
 })
 
-# Initialize Firebase
+def get_env_var(name, required=True):
+    """Helper function to get environment variables with proper error handling"""
+    value = os.environ.get(name)
+    if required and value is None:
+        raise ValueError(f"Missing required environment variable: {name}")
+    return value
+
+def initialize_firebase():
+    """Initialize Firebase with proper error handling and logging"""
+    try:
+        # Get all required environment variables
+        firebase_config = {
+            "type": "service_account",
+            "project_id": get_env_var("FIREBASE_PROJECT_ID"),
+            "private_key_id": get_env_var("FIREBASE_PRIVATE_KEY_ID"),
+            "private_key": get_env_var("FIREBASE_PRIVATE_KEY").replace('\\n', '\n'),
+            "client_email": get_env_var("FIREBASE_CLIENT_EMAIL"),
+            "client_id": get_env_var("FIREBASE_CLIENT_ID"),
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": get_env_var("FIREBASE_CLIENT_CERT_URL"),
+            "universe_domain": "googleapis.com"
+        }
+
+        # Verify the private key format
+        if not firebase_config["private_key"].startswith("-----BEGIN PRIVATE KEY-----"):
+            raise ValueError("Invalid private key format")
+
+        # Initialize Firebase
+        cred = credentials.Certificate(firebase_config)
+        
+        # Check if Firebase app already exists to avoid "already initialized" errors
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app(cred)
+        
+        # Verify Firestore connection
+        db = firestore.client()
+        test_doc = db.collection('test').document('connection_test')
+        test_doc.set({'timestamp': datetime.now().isoformat()}, merge=True)
+        test_doc.delete()
+        
+        print("Firebase initialized successfully")
+        return db
+
+    except ValueError as ve:
+        print(f"Configuration error: {str(ve)}")
+        raise
+    except firebase_admin.exceptions.FirebaseError as fe:
+        print(f"Firebase initialization error: {str(fe)}")
+        raise
+    except Exception as e:
+        print(f"Unexpected error during Firebase initialization: {str(e)}")
+        raise
+
+
+
+# Initialize Firebase when module is imported
 try:
-    cred = credentials.Certificate("medicare11-firebase-adminsdk-fbsvc-8c856c8938.json")
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-    logger.info("Firebase initialized successfully")
+    db = initialize_firebase()
 except Exception as e:
-    logger.error(f"Firebase initialization failed: {str(e)}")
-    raise e
+    print(f"Failed to initialize Firebase: {str(e)}")
 
 # API Keys - Load from environment variables
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
