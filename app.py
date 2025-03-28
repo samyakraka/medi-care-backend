@@ -10,7 +10,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import random
 
-app = Flask(__name__)
+app = Flask(_name_)
 CORS(app)
 # Replace this line:
 
@@ -18,9 +18,11 @@ CORS(app)
 CORS(app, resources={
     r"/api/*": {
         "origins": [
-            "https://your-vercel-app.vercel.app",
-            "http://localhost:3000"  # Keep for local development
-        ]
+            "https://your-vercel-app.vercel.app",  # Replace with your actual Vercel URL
+            "http://localhost:3000"
+        ],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type"]
     }
 })
 # Initialize Firebase
@@ -254,70 +256,38 @@ def process_payment(patient_email: str, amount: float, appointment_id: str, otp:
             'error': f"Payment processing failed: {str(e)}"
         }
 
-@app.route('/api/ai-appointment', methods=['POST'])
+@app.route('/api/ai-appointment', methods=['GET', 'POST', 'OPTIONS'])
 def handle_ai_appointment():
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
+        
+    if request.method == 'GET':
+        return jsonify({
+            "status": "active",
+            "service": "AI Appointment Booking",
+            "version": "1.0"
+        }), 200
+
+    # Existing POST handling code
     try:
         data = request.json
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+            
         user_message = data.get('message', '')
         conversation_history = data.get('history', [])
         patient_info = data.get('patient_info', {})
         
-        specialties = get_specialties()
-        doctors_info = "\n".join(
-            f"{spec}: {', '.join(d['name'] for d in get_doctors_by_specialty(spec))}"
-            for spec in specialties
-        )
+        # [Rest of your existing POST handling code...]
         
-        system_prompt = SYSTEM_PROMPT + f"\n\nAvailable specialties: {', '.join(specialties)}\nAvailable doctors:\n{doctors_info}"
-        
-        messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(conversation_history)
-        messages.append({"role": "user", "content": user_message})
-        
-        response = Groq(api_key=GROQ_API_KEY).chat.completions.create(
-            messages=messages,
-            model="llama3-70b-8192",
-            temperature=0.7
-        )
-        
-        ai_response = response.choices[0].message.content
-        
-        action = None
-        if "[BOOK_APPOINTMENT]" in ai_response:
-            appointment_details = parse_appointment_details(ai_response)
-            if appointment_details:
-                booking_result = book_appointment(patient_info, appointment_details)
-                if booking_result.get('success'):
-                    action = {
-                        "type": "appointment_booked",
-                        "details": booking_result
-                    }
-                    ai_response = f"Appointment booked successfully! Please verify your payment with this OTP: {booking_result['otp']}"
-                else:
-                    ai_response = booking_result.get('error', "Failed to book appointment. Please try again.")
-        
-        if "[REQUEST_PAYMENT]" in ai_response:
-            payment_details = parse_payment_details(ai_response)
-            if payment_details:
-                action = {
-                    "type": "payment_request",
-                    "details": payment_details
-                }
-                ai_response = ai_response.replace("[REQUEST_PAYMENT]", "")
-        
-        audio_base64 = text_to_speech(ai_response)
-        
-        return jsonify({
-            "text_response": ai_response,
-            "audio_response": audio_base64,
-            "action": action
-        })
-    
     except Exception as e:
+        app.logger.error(f"Error in AI appointment: {str(e)}")
         return jsonify({
             "error": "Our servers are busy right now. Please try again later.",
             "details": str(e)
         }), 500
+
+
 
 @app.route('/api/process-payment', methods=['POST'])
 def handle_payment():
@@ -396,5 +366,5 @@ def parse_payment_details(text: str) -> dict:
     
     return details if details else None
 
-if __name__ == '__main__':
+if _name_ == '_main_':
     app.run(host='0.0.0.0', port=5000, debug=True)
