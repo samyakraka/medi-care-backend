@@ -9,28 +9,38 @@ from datetime import datetime, timedelta
 import firebase_admin
 from firebase_admin import credentials, firestore
 import random
+import logging
 
-app = Flask(_name_)
-CORS(app)
-# Replace this line:
+# Initialize Flask app
+app = Flask(__name__)
 
-# With this to allow your Vercel frontend:
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# CORS Configuration - Update with your actual frontend URLs
 CORS(app, resources={
     r"/api/*": {
         "origins": [
-            "https://your-vercel-app.vercel.app",  # Replace with your actual Vercel URL
-            "http://localhost:3000"
+            "https://your-vercel-app.vercel.app",  # Replace with your production frontend URL
+            "http://localhost:3000"               # For local development
         ],
         "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
+        "allow_headers": ["Content-Type", "Authorization"]
     }
 })
-# Initialize Firebase
-cred = credentials.Certificate("medicare11-firebase-adminsdk-fbsvc-8c856c8938.json")
-firebase_admin.initialize_app(cred)
-db = firestore.client()
 
-# Initialize APIs
+# Initialize Firebase
+try:
+    cred = credentials.Certificate("medicare11-firebase-adminsdk-fbsvc-8c856c8938.json")
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
+    logger.info("Firebase initialized successfully")
+except Exception as e:
+    logger.error(f"Firebase initialization failed: {str(e)}")
+    raise e
+
+# API Keys - Load from environment variables
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
@@ -51,58 +61,78 @@ Available commands:
 
 Keep responses short and conversational."""
 
+# Helper Functions
 def text_to_speech(text: str) -> str:
     """Convert text to speech using ElevenLabs API"""
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
-    headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json"
-    }
-    data = {
-        "text": text,
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.5
+    try:
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+        headers = {
+            "xi-api-key": ELEVENLABS_API_KEY,
+            "Content-Type": "application/json"
         }
-    }
-    
-    response = requests.post(url, json=data, headers=headers)
-    if response.status_code == 200:
+        data = {
+            "text": text,
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.5
+            }
+        }
+        
+        response = requests.post(url, json=data, headers=headers)
+        response.raise_for_status()
         return base64.b64encode(response.content).decode('utf-8')
-    raise Exception(f"ElevenLabs API error: {response.text}")
+    except Exception as e:
+        logger.error(f"ElevenLabs API error: {str(e)}")
+        raise Exception(f"Text-to-speech conversion failed: {str(e)}")
 
 def get_specialties() -> list:
     """Get all available specialties from Firebase"""
-    docs = db.collection('doctors').stream()
-    specialties = set()
-    for doc in docs:
-        specialties.add(doc.to_dict().get('specialty', ''))
-    return list(specialties)
+    try:
+        docs = db.collection('doctors').stream()
+        specialties = set()
+        for doc in docs:
+            specialties.add(doc.to_dict().get('specialty', ''))
+        return list(specialties)
+    except Exception as e:
+        logger.error(f"Error getting specialties: {str(e)}")
+        return []
 
 def get_doctors_by_specialty(specialty: str) -> list:
     """Get doctors by specialty from Firebase"""
-    docs = db.collection('doctors').where('specialty', '==', specialty).stream()
-    return [{'id': doc.id, **doc.to_dict()} for doc in docs]
+    try:
+        docs = db.collection('doctors').where('specialty', '==', specialty).stream()
+        return [{'id': doc.id, **doc.to_dict()} for doc in docs]
+    except Exception as e:
+        logger.error(f"Error getting doctors by specialty: {str(e)}")
+        return []
 
 def check_doctor_availability(doctor_id: str, date: str, time: str) -> bool:
     """Check if doctor is available at given date/time"""
-    start_time = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
-    end_time = start_time + timedelta(minutes=30)
-    
-    time_slots_ref = db.collection('timeSlots').where('doctorId', '==', doctor_id) \
-        .where('date', '==', date) \
-        .where('startTime', '==', time) \
-        .where('isBooked', '==', False) \
-        .limit(1).stream()
-    
-    return len(list(time_slots_ref)) > 0
+    try:
+        start_time = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+        end_time = start_time + timedelta(minutes=30)
+        
+        time_slots_ref = db.collection('timeSlots').where('doctorId', '==', doctor_id) \
+            .where('date', '==', date) \
+            .where('startTime', '==', time) \
+            .where('isBooked', '==', False) \
+            .limit(1).stream()
+        
+        return len(list(time_slots_ref)) > 0
+    except Exception as e:
+        logger.error(f"Error checking doctor availability: {str(e)}")
+        return False
 
 def get_patient_by_email(email: str) -> dict:
     """Get patient document by email"""
-    docs = db.collection('patients').where('email', '==', email).limit(1).stream()
-    for doc in docs:
-        return {'id': doc.id, **doc.to_dict()}
-    return None
+    try:
+        docs = db.collection('patients').where('email', '==', email).limit(1).stream()
+        for doc in docs:
+            return {'id': doc.id, **doc.to_dict()}
+        return None
+    except Exception as e:
+        logger.error(f"Error getting patient by email: {str(e)}")
+        return None
 
 def book_appointment(patient_info: dict, appointment_details: dict) -> dict:
     """Book appointment in Firebase"""
@@ -152,6 +182,7 @@ def book_appointment(patient_info: dict, appointment_details: dict) -> dict:
         
         appointment_ref = db.collection('appointments').add(appointment_data)
         
+        # Mark time slot as booked
         time_slots_ref = db.collection('timeSlots').where('doctorId', '==', appointment_details['doctorId']) \
             .where('date', '==', appointment_details['date']) \
             .where('startTime', '==', appointment_details['startTime']) \
@@ -160,6 +191,7 @@ def book_appointment(patient_info: dict, appointment_details: dict) -> dict:
         for slot in time_slots_ref:
             db.collection('timeSlots').document(slot.id).update({'isBooked': True})
         
+        # Generate OTP for payment verification
         otp = str(random.randint(100000, 999999))
         
         return {
@@ -174,6 +206,7 @@ def book_appointment(patient_info: dict, appointment_details: dict) -> dict:
         }
     
     except Exception as e:
+        logger.error(f"Error booking appointment: {str(e)}")
         return {
             "success": False,
             "error": f"Failed to book appointment: {str(e)}"
@@ -251,81 +284,14 @@ def process_payment(patient_email: str, amount: float, appointment_id: str, otp:
         }
     
     except Exception as e:
+        logger.error(f"Error processing payment: {str(e)}")
         return {
             'success': False,
             'error': f"Payment processing failed: {str(e)}"
         }
 
-@app.route('/api/ai-appointment', methods=['GET', 'POST', 'OPTIONS'])
-def handle_ai_appointment():
-    if request.method == 'OPTIONS':
-        return jsonify({"status": "ok"}), 200
-        
-    if request.method == 'GET':
-        return jsonify({
-            "status": "active",
-            "service": "AI Appointment Booking",
-            "version": "1.0"
-        }), 200
-
-    # Existing POST handling code
-    try:
-        data = request.json
-        if not data:
-            return jsonify({"error": "No data provided"}), 400
-            
-        user_message = data.get('message', '')
-        conversation_history = data.get('history', [])
-        patient_info = data.get('patient_info', {})
-        
-        # [Rest of your existing POST handling code...]
-        
-    except Exception as e:
-        app.logger.error(f"Error in AI appointment: {str(e)}")
-        return jsonify({
-            "error": "Our servers are busy right now. Please try again later.",
-            "details": str(e)
-        }), 500
-
-
-
-@app.route('/api/process-payment', methods=['POST'])
-def handle_payment():
-    try:
-        data = request.json
-        patient_email = data.get('patient_email')
-        amount = float(data.get('amount', 0))
-        appointment_id = data.get('appointment_id')
-        otp = data.get('otp')
-        
-        if not all([patient_email, amount, appointment_id, otp]):
-            return jsonify({
-                "success": False,
-                "error": "Missing required fields. Please provide all payment details."
-            }), 400
-        
-        result = process_payment(patient_email, amount, appointment_id, otp)
-        
-        if result.get('success'):
-            return jsonify({
-                "success": True,
-                "newBalance": result['newBalance'],
-                "transactionId": result['transactionId'],
-                "message": result['message']
-            })
-        else:
-            return jsonify({
-                "success": False,
-                "error": result.get('error', "Payment failed. Please try again.")
-            }), 400
-    
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": "Payment processing is currently unavailable. Please try again later."
-        }), 500
-
 def parse_appointment_details(text: str) -> dict:
+    """Parse appointment details from text"""
     patterns = {
         "specialty": r"special(?:ty|ies)[:\s]*([^\n]+)",
         "doctorId": r"doctor id[:\s]*([^\n]+)",
@@ -353,6 +319,7 @@ def parse_appointment_details(text: str) -> dict:
     return details if details else None
 
 def parse_payment_details(text: str) -> dict:
+    """Parse payment details from text"""
     patterns = {
         "amount": r"amount[:\s]*([^\n]+)",
         "appointmentId": r"appointment id[:\s]*([^\n]+)"
@@ -366,5 +333,145 @@ def parse_payment_details(text: str) -> dict:
     
     return details if details else None
 
-if _name_ == '_main_':
+# API Endpoints
+@app.route('/api/ai-appointment', methods=['GET', 'POST', 'OPTIONS'])
+def handle_ai_appointment():
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
+        
+    if request.method == 'GET':
+        return jsonify({
+            "status": "active",
+            "service": "AI Appointment Booking",
+            "version": "1.0",
+            "documentation": "Use POST method to interact with the AI assistant"
+        }), 200
+
+    # POST request handling
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+            
+        user_message = data.get('message', '')
+        conversation_history = data.get('history', [])
+        patient_info = data.get('patient_info', {})
+        
+        if not user_message:
+            return jsonify({"error": "Message is required"}), 400
+        
+        specialties = get_specialties()
+        doctors_info = "\n".join(
+            f"{spec}: {', '.join(d['name'] for d in get_doctors_by_specialty(spec))}"
+            for spec in specialties
+        )
+        
+        system_prompt = SYSTEM_PROMPT + f"\n\nAvailable specialties: {', '.join(specialties)}\nAvailable doctors:\n{doctors_info}"
+        
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(conversation_history)
+        messages.append({"role": "user", "content": user_message})
+        
+        # Call Groq API
+        client = Groq(api_key=GROQ_API_KEY)
+        response = client.chat.completions.create(
+            messages=messages,
+            model="llama3-70b-8192",
+            temperature=0.7
+        )
+        
+        ai_response = response.choices[0].message.content
+        
+        action = None
+        if "[BOOK_APPOINTMENT]" in ai_response:
+            appointment_details = parse_appointment_details(ai_response)
+            if appointment_details:
+                booking_result = book_appointment(patient_info, appointment_details)
+                if booking_result.get('success'):
+                    action = {
+                        "type": "appointment_booked",
+                        "details": booking_result
+                    }
+                    ai_response = f"Appointment booked successfully! Please verify your payment with this OTP: {booking_result['otp']}"
+                else:
+                    ai_response = booking_result.get('error', "Failed to book appointment. Please try again.")
+        
+        if "[REQUEST_PAYMENT]" in ai_response:
+            payment_details = parse_payment_details(ai_response)
+            if payment_details:
+                action = {
+                    "type": "payment_request",
+                    "details": payment_details
+                }
+                ai_response = ai_response.replace("[REQUEST_PAYMENT]", "")
+        
+        audio_base64 = text_to_speech(ai_response)
+        
+        return jsonify({
+            "text_response": ai_response,
+            "audio_response": audio_base64,
+            "action": action
+        })
+    
+    except Exception as e:
+        logger.error(f"Error in AI appointment handler: {str(e)}")
+        return jsonify({
+            "error": "Our servers are busy right now. Please try again later.",
+            "details": str(e)
+        }), 500
+
+@app.route('/api/process-payment', methods=['POST', 'OPTIONS'])
+def handle_payment():
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
+        
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "success": False,
+                "error": "Missing required fields. Please provide all payment details."
+            }), 400
+        
+        patient_email = data.get('patient_email')
+        amount = float(data.get('amount', 0))
+        appointment_id = data.get('appointment_id')
+        otp = data.get('otp')
+        
+        if not all([patient_email, amount, appointment_id, otp]):
+            return jsonify({
+                "success": False,
+                "error": "Missing required fields. Please provide all payment details."
+            }), 400
+        
+        result = process_payment(patient_email, amount, appointment_id, otp)
+        
+        if result.get('success'):
+            return jsonify({
+                "success": True,
+                "newBalance": result['newBalance'],
+                "transactionId": result['transactionId'],
+                "message": result['message']
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": result.get('error', "Payment failed. Please try again.")
+            }), 400
+    
+    except Exception as e:
+        logger.error(f"Error in payment handler: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": "Payment processing is currently unavailable. Please try again later."
+        }), 500
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat()
+    }), 200
+
+if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
